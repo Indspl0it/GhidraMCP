@@ -328,7 +328,17 @@ public class GhidraMCPServerScript extends GhidraScript {
             sendResponse(exchange, getTaskResult(taskId));
         });
 
-        // ---- Additional endpoints ----
+        // ---- Program info and analysis endpoints ----
+
+        server.createContext("/program_info", exchange -> {
+            sendResponse(exchange, getProgramInfo());
+        });
+
+        server.createContext("/get_callees", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getCallees(address));
+        });
 
         server.createContext("/get_callers", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
@@ -1177,6 +1187,57 @@ public class GhidraMCPServerScript extends GhidraScript {
     // ----------------------------------------------------------------------------------
     // Additional endpoints: callers, data types, memory search
     // ----------------------------------------------------------------------------------
+
+    private String getProgramInfo() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Name: ").append(currentProgram.getName()).append("\n");
+        sb.append("Language: ").append(currentProgram.getLanguage().getLanguageID()).append("\n");
+        sb.append("Compiler: ").append(currentProgram.getCompilerSpec().getCompilerSpecID()).append("\n");
+        sb.append("Address Size: ").append(currentProgram.getAddressFactory().getDefaultAddressSpace().getSize()).append("-bit\n");
+        sb.append("Image Base: ").append(currentProgram.getImageBase()).append("\n");
+        sb.append("Format: ").append(currentProgram.getExecutableFormat()).append("\n");
+        sb.append("SHA256: ").append(currentProgram.getExecutableSHA256()).append("\n");
+        sb.append("Created: ").append(currentProgram.getCreationDate()).append("\n");
+
+        int funcCount = 0;
+        for (Function f : currentProgram.getFunctionManager().getFunctions(true)) {
+            funcCount++;
+        }
+        sb.append("Functions: ").append(funcCount).append("\n");
+
+        sb.append("Memory Blocks:\n");
+        for (MemoryBlock block : currentProgram.getMemory().getBlocks()) {
+            sb.append(String.format("  %s: %s-%s (%s, %s%s%s)\n",
+                block.getName(), block.getStart(), block.getEnd(),
+                block.isInitialized() ? "initialized" : "uninitialized",
+                block.isRead() ? "r" : "-",
+                block.isWrite() ? "w" : "-",
+                block.isExecute() ? "x" : "-"));
+        }
+        return sb.toString();
+    }
+
+    private String getCallees(String addressStr) {
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        try {
+            Address addr = currentProgram.getAddressFactory().getAddress(addressStr);
+            Function func = getFunctionForAddress(addr);
+            if (func == null) return "No function found at " + addressStr;
+
+            Set<Function> calledFunctions = func.getCalledFunctions(monitor);
+            List<String> results = new ArrayList<>();
+            for (Function called : calledFunctions) {
+                results.add(String.format("%s @ %s", called.getName(), called.getEntryPoint()));
+            }
+
+            if (results.isEmpty()) return "No callees found for " + func.getName();
+            Collections.sort(results);
+            return String.join("\n", results);
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
 
     private String getCallers(String addressStr) {
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
