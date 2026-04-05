@@ -57,6 +57,21 @@ def safe_post(endpoint: str, data: dict | str) -> str:
     except Exception as e:
         return f"Request failed: {str(e)}"
 
+def safe_get_long(endpoint: str, params: dict = None, timeout: int = 300) -> list:
+    """Perform a GET request with a longer timeout for async operations."""
+    if params is None:
+        params = {}
+    url = urljoin(ghidra_server_url, endpoint)
+    try:
+        response = requests.get(url, params=params, timeout=timeout)
+        response.encoding = 'utf-8'
+        if response.ok:
+            return response.text.splitlines()
+        else:
+            return [f"Error {response.status_code}: {response.text.strip()}"]
+    except Exception as e:
+        return [f"Request failed: {str(e)}"]
+
 @mcp.tool()
 def list_methods(offset: int = 0, limit: int = 100) -> list:
     """
@@ -286,6 +301,166 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def get_program_info() -> str:
+    """
+    Get program metadata: architecture, language, compiler, base address, format, SHA256,
+    function count, and memory block layout. Call this first to understand what you're analyzing.
+    """
+    return "\n".join(safe_get("program_info"))
+
+@mcp.tool()
+def get_callees(address: str) -> list:
+    """
+    Get all functions called by the function at the given address.
+    Useful for understanding code flow and dependencies.
+    """
+    return safe_get("get_callees", {"address": address})
+
+@mcp.tool()
+def get_callers(address: str) -> list:
+    """
+    Get all functions that call the function at the given address.
+    Useful for impact analysis and understanding usage.
+    """
+    return safe_get("get_callers", {"address": address})
+
+@mcp.tool()
+def list_data_types(filter: str = None, offset: int = 0, limit: int = 100) -> list:
+    """
+    List available data types in the program's data type manager.
+
+    Args:
+        filter: Optional substring filter on type names
+        offset: Pagination offset (default: 0)
+        limit: Maximum results (default: 100)
+    """
+    params = {"offset": offset, "limit": limit}
+    if filter:
+        params["filter"] = filter
+    return safe_get("list_data_types", params)
+
+@mcp.tool()
+def search_memory(pattern: str, max_results: int = 20) -> list:
+    """
+    Search program memory for a hex byte pattern.
+
+    Args:
+        pattern: Hex bytes to search for (e.g., "48 8b 05" or "488b05")
+        max_results: Maximum number of matches to return (default: 20)
+    """
+    return safe_get("search_memory", {"pattern": pattern, "max_results": max_results})
+
+@mcp.tool()
+def set_plate_comment(address: str, comment: str) -> str:
+    """
+    Set a plate comment for a given address. Plate comments appear as banners above code blocks.
+    """
+    return safe_post("set_plate_comment", {"address": address, "comment": comment})
+
+# --- Async decompilation tools ---
+
+@mcp.tool()
+def decompile_function_async(address: str) -> str:
+    """
+    Start an async decompilation of a function at the given address.
+    Returns a task_id that can be polled with get_task_status/get_task_result.
+    Useful for large functions that take a long time to decompile.
+    """
+    return "\n".join(safe_get("decompile_async", {"address": address}))
+
+@mcp.tool()
+def get_task_status(task_id: str) -> str:
+    """
+    Get the status of an async decompilation task.
+    Returns state (running/completed/error) and elapsed time.
+    """
+    return "\n".join(safe_get("task_status", {"task_id": task_id}))
+
+@mcp.tool()
+def get_task_result(task_id: str) -> str:
+    """
+    Get the result of a completed async decompilation task.
+    Returns the decompiled code if the task is complete.
+    """
+    return "\n".join(safe_get_long("task_result", {"task_id": task_id}))
+
+# --- Data manipulation tools ---
+
+@mcp.tool()
+def clear_data(address: str, length: int = None) -> str:
+    """
+    Clear defined data at an address, reverting it to undefined bytes.
+    If length is not specified, clears the data item at that address.
+    """
+    params = {"address": address}
+    if length is not None:
+        params["length"] = str(length)
+    return safe_post("clear_data", params)
+
+@mcp.tool()
+def define_data(address: str, data_type: str) -> str:
+    """
+    Define a data type at an address (e.g., int, short, float, double, char, pointer).
+    """
+    return safe_post("define_data", {"address": address, "data_type": data_type})
+
+@mcp.tool()
+def read_bytes(address: str, length: int = 16) -> str:
+    """
+    Read raw bytes at an address. Returns hex-encoded bytes.
+
+    Args:
+        address: Memory address in hex format (e.g. "0x1400010a0")
+        length: Number of bytes to read (1-4096, default: 16)
+    """
+    return "\n".join(safe_get("read_bytes", {"address": address, "length": length}))
+
+@mcp.tool()
+def get_data_at(address: str) -> str:
+    """
+    Get defined data information at an address, including type, label, length and value.
+    """
+    return "\n".join(safe_get("get_data_at", {"address": address}))
+
+@mcp.tool()
+def create_label(address: str, name: str) -> str:
+    """
+    Create a label/symbol at the specified address.
+    """
+    return safe_post("create_label", {"address": address, "name": name})
+
+@mcp.tool()
+def create_enum(name: str, members: str, size: int = 4) -> str:
+    """
+    Create an enum data type.
+
+    Args:
+        name: Enum type name
+        members: Semicolon-separated name:value pairs (e.g. "VAL_A:0;VAL_B:1;VAL_C:2")
+        size: Enum size in bytes (default: 4)
+    """
+    return safe_post("create_enum", {"name": name, "size": str(size), "members": members})
+
+@mcp.tool()
+def create_struct(name: str, fields: str) -> str:
+    """
+    Create a struct data type.
+
+    Args:
+        name: Struct type name
+        fields: Semicolon-separated name:type pairs (e.g. "field1:int;field2:char;ptr:pointer")
+    """
+    return safe_post("create_struct", {"name": name, "fields": fields})
+
+@mcp.tool()
+def apply_struct(address: str, struct_name: str) -> str:
+    """
+    Apply a struct data type at an address.
+    """
+    return safe_post("apply_struct", {"address": address, "struct_name": struct_name})
+
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
